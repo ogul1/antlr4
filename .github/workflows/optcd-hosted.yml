@@ -1,0 +1,366 @@
+# swift,
+# Check out the code before setting the environment since some
+# of the actions actually parse the files to figure out the
+# dependencies, for instance, the setup-java actually parses
+# **/pom.xml files to decide what to cache.
+
+name: Modified antlr4
+permissions:
+  contents: read
+jobs:
+  cpp-lib-build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - macos-12
+        - ubuntu-20.04
+        - windows-2022
+        compiler:
+        - clang
+        - gcc
+        unity_build:
+        - true
+        - false
+        exclude:
+        - os: windows-2022
+          compiler: gcc
+        include:
+        - os: windows-2022
+          compiler: cl
+    steps:
+    - name: Setup Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |-
+        python -m pip install --upgrade pip
+        pip install inotify
+    - name: Run inotifywait
+      run: |-
+        python3 -c "
+        import inotify.adapters
+        import inotify.constants
+        import os
+        from datetime import datetime, timezone
+        with open('/home/runner/inotifywait-log-cpp-lib-build (${{ matrix.os }}, ${{ matrix.compiler }}, ${{ matrix.unity_build }}).csv', 'w') as log_file:
+          i = inotify.adapters.InotifyTree('/home/runner/work/antlr4/antlr4', inotify.constants.IN_CREATE | inotify.constants.IN_ACCESS)
+          for event in i.event_gen(yield_nones=False):
+            (_, type_names, path, filename) = event
+            now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+            events = ','.join(type_names)
+            log_file.write(f'{now};{path};{filename};{events}\n')
+            log_file.flush()
+            os.fsync(log_file.fileno())
+        " &
+    - name: Install dependencies (Ubuntu)
+      run: |-
+        sudo apt-get update -qq
+        sudo apt install -y ninja-build
+    - run: touch optcd-3.txt
+    - name: Install dependencies (MacOS)
+      run: brew install ninja
+    - run: touch optcd-4.txt
+    - name: Setup Clang
+      uses: egor-tensin/setup-clang@v1
+      with:
+        version: 13
+        platform: x64
+        cygwin: 0
+    - run: touch optcd-5.txt
+    - name: Check out code
+      uses: actions/checkout@v3
+    - run: touch optcd-6.txt
+    - name: Use ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: ${{ matrix.os }}-${{ matrix.compiler }}
+    - run: touch optcd-7.txt
+    - name: Configure shell (Ubuntu)
+      run: echo 'PATH=/usr/lib/ccache:'"$PATH" >> $GITHUB_ENV
+    - run: touch optcd-8.txt
+    - name: Configure shell (MacOS)
+      run: echo "PATH=$(brew --prefix)/opt/ccache/libexec:$PATH" >> $GITHUB_ENV
+    - run: touch optcd-9.txt
+    - name: Build (Windows)
+      shell: cmd
+      run: |-
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+
+        if "${{ matrix.compiler }}" EQU "cl" (
+          set CC=cl
+          set CXX=cl
+          echo 'CC=cl' >> $GITHUB_ENV
+          echo 'CXX=cl' >> $GITHUB_ENV
+        ) else (
+          set CC=clang
+          set CXX=clang++
+          echo 'CC=clang' >> $GITHUB_ENV
+          echo 'CXX=clang++' >> $GITHUB_ENV
+        )
+
+        set
+        where cmake && cmake --version
+        where ninja && ninja --version
+        where %CC% && %CC% -version
+        where %CXX% && %CXX% -version
+
+        cd runtime/Cpp
+
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug -DANTLR_BUILD_CPP_TESTS=OFF -DCMAKE_UNITY_BUILD=${{ matrix.unity_build }} -DCMAKE_UNITY_BUILD_BATCH_SIZE=20 -S . -B out/Debug
+        if %errorlevel% neq 0 exit /b %errorlevel%
+
+        cmake --build out/Debug -j %NUMBER_OF_PROCESSORS%
+        if %errorlevel% neq 0 exit /b %errorlevel%
+
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DANTLR_BUILD_CPP_TESTS=OFF -S . -B out/Release
+        if %errorlevel% neq 0 exit /b %errorlevel%
+
+        cmake --build out/Release -j %NUMBER_OF_PROCESSORS%
+        if %errorlevel% neq 0 exit /b %errorlevel%
+    - run: touch optcd-10.txt
+    - name: Build (non-Windows)
+      run: |-
+        if [ "${{matrix.compiler}}" == "clang" ]; then
+          export CC=clang
+          export CXX=clang++
+          echo 'CC=clang' >> $GITHUB_ENV
+          echo 'CXX=clang++' >> $GITHUB_ENV
+        else
+          export CC=gcc
+          export CXX=g++
+          echo 'CC=gcc' >> $GITHUB_ENV
+          echo 'CXX=g++' >> $GITHUB_ENV
+        fi
+
+        env
+        which cmake && cmake --version
+        which ninja && ninja --version
+        which $CC && $CC --version
+        which $CXX && $CXX --version
+
+        cd runtime/Cpp
+
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug -DANTLR_BUILD_CPP_TESTS=OFF -DCMAKE_UNITY_BUILD=${{ matrix.unity_build }} -DCMAKE_UNITY_BUILD_BATCH_SIZE=20 -S . -B out/Debug
+        cmake --build out/Debug --parallel
+
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DANTLR_BUILD_CPP_TESTS=OFF -S . -B out/Release
+        cmake --build out/Release --parallel
+    - run: touch optcd-11.txt
+    - name: Prepare artifacts
+      run: |-
+        cd ${{ github.workspace }}/..
+        tar czfp antlr_${{ matrix.os }}_${{ matrix.compiler }}.tgz --exclude='.git' antlr4
+        mv antlr_${{ matrix.os }}_${{ matrix.compiler }}.tgz ${{ github.workspace }}/.
+    - run: touch optcd-12.txt
+    - name: Archive artifacts
+      continue-on-error: true
+      uses: actions/upload-artifact@v3
+      with:
+        name: antlr_${{ matrix.os }}_${{ matrix.compiler }}
+        path: antlr_${{ matrix.os }}_${{ matrix.compiler }}.tgz
+    - run: touch optcd-13.txt
+    - name: Upload inotifywait logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: inotifywait-cpp-lib-build (${{ matrix.os }}, ${{ matrix.compiler }},
+          ${{ matrix.unity_build }})
+        path: /home/runner/inotifywait-log-cpp-lib-build (${{ matrix.os }}, ${{ matrix.compiler
+          }}, ${{ matrix.unity_build }}).csv
+    name: cpp-lib-build (${{ matrix.os }}, ${{ matrix.compiler }}, ${{ matrix.unity_build
+      }})
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - macos-12
+        - ubuntu-20.04
+        - windows-2022
+        target:
+        - tool
+        - cpp
+        - csharp
+        - dart
+        - go
+        - java
+        - javascript
+        - typescript
+        - php
+        - python3
+        exclude:
+        - os: windows-2022
+          target: swift
+    steps:
+    - name: Setup Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |-
+        python -m pip install --upgrade pip
+        pip install inotify
+    - name: Run inotifywait
+      run: |-
+        python3 -c "
+        import inotify.adapters
+        import inotify.constants
+        import os
+        from datetime import datetime, timezone
+        with open('/home/runner/inotifywait-log-build (${{ matrix.os }}, ${{ matrix.target }}).csv', 'w') as log_file:
+          i = inotify.adapters.InotifyTree('/home/runner/work/antlr4/antlr4', inotify.constants.IN_CREATE | inotify.constants.IN_ACCESS)
+          for event in i.event_gen(yield_nones=False):
+            (_, type_names, path, filename) = event
+            now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+            events = ','.join(type_names)
+            log_file.write(f'{now};{path};{filename};{events}\n')
+            log_file.flush()
+            os.fsync(log_file.fileno())
+        " &
+    - name: Check out code
+      uses: actions/checkout@v3
+    - run: touch optcd-3.txt
+    - name: Checkout antlr PHP runtime
+      uses: actions/checkout@v3
+      with:
+        repository: antlr/antlr-php-runtime
+        path: runtime/PHP
+    - run: touch optcd-4.txt
+    - name: Setup PHP 8.2
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.3'
+        extensions: mbstring
+        tools: composer
+    - run: touch optcd-5.txt
+    - name: Install dependencies
+      env:
+        COMPOSER_CACHE_DIR: ${{ github.workspace }}/.cache
+      run: |-
+        cd runtime/PHP
+        composer install --no-progress --no-interaction --prefer-dist --optimize-autoloader
+    - run: touch optcd-6.txt
+    - name: Install dependencies (Ubuntu)
+      run: |-
+        sudo apt-get update -qq
+        sudo apt install -y ninja-build
+    - run: touch optcd-7.txt
+    - name: Install dependencies (MacOS)
+      run: brew install ninja
+    - run: touch optcd-8.txt
+    - name: Set up JDK 11
+      id: setup-java
+      uses: actions/setup-java@v3
+      with:
+        distribution: zulu
+        java-version: 11
+        cache: maven
+    - run: touch optcd-9.txt
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v4.5
+      with:
+        maven-version: 3.8.5
+    - run: touch optcd-10.txt
+    - name: Add msbuild to PATH
+      uses: microsoft/setup-msbuild@v1.1
+    - run: touch optcd-11.txt
+    - name: Set up Python 3
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.x
+        architecture: x64
+    - run: touch optcd-12.txt
+    - name: Set up Node 16
+      uses: actions/setup-node@v3.6.0
+      with:
+        node-version: '16'
+    - run: touch optcd-13.txt
+    - name: Setup Dotnet
+      uses: actions/setup-dotnet@v3.0.3
+      with:
+        dotnet-version: 7.0.x
+    - run: touch optcd-14.txt
+    - name: Setup Dart 2.12.1
+      uses: dart-lang/setup-dart@v1.3
+      with:
+        sdk: 2.12.1
+    - run: touch optcd-15.txt
+    - name: Setup Go 1.19
+      uses: actions/setup-go@v3.3.1
+      with:
+        go-version: ^1.19
+    - run: touch optcd-16.txt
+    - name: Setup Swift
+      uses: swift-actions/setup-swift@v1.19.0
+      with:
+        swift-version: '5.2'
+    - run: touch optcd-17.txt
+    - name: Use ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: ${{ matrix.os }}-${{ matrix.target }}
+    - run: touch optcd-18.txt
+    - name: Configure shell (Ubuntu)
+      run: echo 'PATH=/usr/lib/ccache:'"$PATH" >> $GITHUB_ENV
+    - run: touch optcd-19.txt
+    - name: Configure shell (MacOS)
+      run: echo "PATH=$(brew --prefix)/opt/ccache/libexec:$PATH" >> $GITHUB_ENV
+    - run: touch optcd-20.txt
+    - name: Build ANTLR with Maven
+      run: mvn install -DskipTests=true -Darguments="-Dmaven.javadoc.skip=true" -B
+        -V
+    - run: touch optcd-21.txt
+    - name: Test tool
+      run: |-
+        cd tool-testsuite
+        mvn test
+    - run: touch optcd-22.txt
+    - name: Test runtime (Windows)
+      run: |-
+        gci env:* | sort-object name
+
+        cd runtime-testsuite
+        switch ("${{ matrix.target }}")
+        {
+          python3 { mvn -X '-Dantlr-python3-exec="${{ env.pythonLocation }}\python.exe"' '-Dtest=python3.**' test }
+          default { mvn -X '-Dtest=${{ matrix.target }}.**' test }
+        }
+      env:
+        CMAKE_GENERATOR: Ninja
+    - run: touch optcd-23.txt
+    - name: Test runtime (non-Windows)
+      run: |-
+        env
+
+        cd runtime-testsuite
+        case ${{ matrix.target }} in
+          python3) mvn -X '-Dantlr-python3-exec=${{ env.pythonLocation }}/bin/python' '-Dtest=python3.**' test ;;
+          *) mvn -X '-Dtest=${{ matrix.target }}.**' test ;;
+        esac
+    - run: touch optcd-24.txt
+    - name: Prepare artifacts
+      run: |-
+        cd ${{ github.workspace }}/..
+        tar czfp antlr_${{ matrix.os }}_${{ matrix.target }}.tgz --exclude='.git' antlr4
+        mv antlr_${{ matrix.os }}_${{ matrix.target }}.tgz ${{ github.workspace }}/.
+    - run: touch optcd-25.txt
+    - name: Archive artifacts
+      continue-on-error: true
+      uses: actions/upload-artifact@v3
+      with:
+        name: antlr_${{ matrix.os }}_${{ matrix.target }}
+        path: antlr_${{ matrix.os }}_${{ matrix.target }}.tgz
+    - run: touch optcd-26.txt
+    - name: Upload inotifywait logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: inotifywait-build (${{ matrix.os }}, ${{ matrix.target }})
+        path: /home/runner/inotifywait-log-build (${{ matrix.os }}, ${{ matrix.target
+          }}).csv
+    name: build (${{ matrix.os }}, ${{ matrix.target }})
+'on':
+- push
+- workflow_dispatch
